@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CollabSync — Real-Time Collaborative Editor</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: rgba(255,255,255,0.04);
+      --surface2: rgba(255,255,255,0.08);
+      --border: rgba(255,255,255,0.12);
+      --accent: #ffffff;
+      --accent2: #cccccc;
+      --green: #ffffff;
+      --red: #999999;
+      --yellow: #cccccc;
+      --text: #f0f0f0;
+      --muted: #666666;
+      --glow: 0 0 40px rgba(255,255,255,0.05);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* no background overlay */
+    body::before { display: none; }
+
+    /* ── Header ── */
+    header {
+      position: relative; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.2rem 2rem;
+      border-bottom: 1px solid var(--border);
+      background: #0a0a0a;
+    }
+    .logo { display: flex; align-items: center; gap: .7rem; }
+    .logo-text { font-size: 1.2rem; font-weight: 700; letter-spacing: -.02em; color: #ffffff; }
+    .logo-text span { color: #ffffff; }
+    .status-bar { display: flex; align-items: center; gap: 1.2rem; }
+    .status-dot {
+      display: flex; align-items: center; gap: .4rem;
+      font-size: .78rem; font-weight: 500; color: var(--muted);
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555555; transition: background .3s;
+    }
+    .dot.connected { background: #ffffff; box-shadow: 0 0 8px rgba(255,255,255,0.4); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    /* ── Layout ── */
+    .container {
+      position: relative; z-index: 1;
+      display: grid;
+      grid-template-columns: 320px 1fr 280px;
+      grid-template-rows: auto 1fr;
+      gap: 0;
+      height: calc(100vh - 65px);
+    }
+
+    /* ── Panel base ── */
+    .panel {
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
+    .panel-header {
+      padding: .9rem 1.2rem;
+      border-bottom: 1px solid var(--border);
+      font-size: .75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    /* ── Left: Connect Panel ── */
+    .left-panel { background: rgba(255,255,255,0.02); }
+    .connect-form { padding: 1.2rem; display: flex; flex-direction: column; gap: .9rem; }
+
+    .field label {
+      display: block; font-size: .75rem; font-weight: 500;
+      color: var(--muted); margin-bottom: .4rem; letter-spacing: .04em;
+    }
+    .field input {
+      width: 100%; padding: .65rem .9rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      font-family: 'JetBrains Mono', monospace; font-size: .82rem;
+      transition: border-color .2s, box-shadow .2s;
+      outline: none;
+    }
+    .field input:focus {
+      border-color: #ffffff;
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
+    }
+
+    .btn {
+      padding: .7rem 1.2rem; border-radius: 8px; border: none;
+      font-family: 'Inter', sans-serif; font-size: .85rem; font-weight: 600;
+      cursor: pointer; transition: all .2s; display: flex;
+      align-items: center; justify-content: center; gap: .5rem;
+    }
+    .btn-primary {
+      background: #ffffff;
+      color: #000000; box-shadow: 0 4px 15px rgba(255,255,255,0.15);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(255,255,255,0.2); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+    .btn-secondary {
+      background: var(--surface2); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    .btn-danger {
+      background: rgba(255,255,255,0.04); color: #999999;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .btn-danger:hover { background: rgba(255,255,255,0.08); color: #cccccc; }
+
+    .divider {
+      border: none; border-top: 1px solid var(--border); margin: .4rem 0;
+    }
+
+    /* presence list */
+    .presence-list { padding: .8rem 1.2rem; flex: 1; overflow-y: auto; }
+    .presence-item {
+      display: flex; align-items: center; gap: .7rem;
+      padding: .5rem .7rem; border-radius: 8px; margin-bottom: .4rem;
+      background: var(--surface); border: 1px solid var(--border);
+      font-size: .82rem; animation: slideIn .25s ease;
+    }
+    @keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:none} }
+    .avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: .7rem; font-weight: 700; flex-shrink: 0;
+    }
+    .presence-name { font-weight: 500; flex: 1; }
+    .presence-you { font-size: .68rem; color: #aaaaaa; background: rgba(255,255,255,0.08); padding: .1rem .4rem; border-radius: 4px; }
+
+    /* ── Centre: Editor ── */
+    .editor-panel { display: flex; flex-direction: column; border-right: none; }
+    .editor-toolbar {
+      padding: .8rem 1.2rem; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: .7rem; flex-wrap: wrap;
+      background: rgba(255,255,255,0.02);
+    }
+    .doc-id-badge {
+      font-family: 'JetBrains Mono', monospace; font-size: .75rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      padding: .25rem .6rem; border-radius: 6px; color: var(--accent2);
+    }
+    .version-badge {
+      font-size: .72rem; color: var(--muted);
+      background: var(--surface); border: 1px solid var(--border);
+      padding: .25rem .6rem; border-radius: 6px;
+    }
+    .spacer { flex: 1; }
+
+    .editor-body { flex: 1; display: flex; flex-direction: column; position: relative; }
+    #editor {
+      flex: 1; width: 100%; padding: 1.5rem 2rem;
+      background: transparent; border: none; outline: none;
+      color: var(--text); font-family: 'JetBrains Mono', monospace;
+      font-size: .92rem; line-height: 1.75; resize: none;
+      caret-color: var(--accent2);
+    }
+    #editor::placeholder { color: var(--muted); font-style: italic; }
+    #editor:disabled { opacity: .4; }
+
+    .editor-footer {
+      padding: .6rem 1.2rem; border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: .7rem;
+      background: rgba(255,255,255,0.02);
+      font-size: .75rem; color: var(--muted);
+    }
+    .char-count { margin-left: auto; }
+
+    /* typing indicator */
+    .typing-bar {
+      padding: .4rem 1.2rem; font-size: .75rem; color: var(--accent2);
+      min-height: 26px; transition: opacity .3s;
+    }
+
+    /* ── Right: Activity Log ── */
+    .right-panel { background: rgba(255,255,255,0.02); }
+    .log-list { flex: 1; overflow-y: auto; padding: .6rem; display: flex; flex-direction: column; gap: .35rem; }
+    .log-item {
+      padding: .5rem .75rem; border-radius: 7px;
+      font-size: .73rem; line-height: 1.5;
+      border: 1px solid var(--border);
+      animation: fadeUp .2s ease;
+    }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+    .log-item.info  { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.1); }
+    .log-item.success { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.15); color: #e0e0e0; }
+    .log-item.error { background: rgba(255,255,255,0.02); border-color: rgba(255,255,255,0.08); color: #888888; }
+    .log-item.op { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.12); }
+    .log-time { color: var(--muted); font-size: .68rem; margin-top: .15rem; }
+
+    /* health cards */
+    .health-cards { padding: .8rem; display: flex; flex-direction: column; gap: .5rem; }
+    .health-card {
+      padding: .6rem .9rem; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      display: flex; align-items: center; gap: .6rem; font-size: .78rem;
+    }
+    .health-card .h-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .h-up { background: #ffffff; box-shadow: 0 0 6px rgba(255,255,255,0.3); }
+    .h-down { background: #444444; }
+    .h-label { flex: 1; font-weight: 500; }
+    .h-val { color: var(--muted); font-size: .7rem; font-family: 'JetBrains Mono', monospace; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* toast */
+    #toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: rgba(15,15,15,0.95); border: 1px solid var(--border);
+      backdrop-filter: blur(20px); padding: .7rem 1.4rem;
+      border-radius: 10px; font-size: .85rem; font-weight: 500;
+      box-shadow: var(--glow); z-index: 999;
+      transition: transform .35s cubic-bezier(.34,1.56,.64,1), opacity .35s;
+      opacity: 0;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    #toast.success { border-color: rgba(255,255,255,0.3); color: #ffffff; }
+    #toast.error   { border-color: rgba(255,255,255,0.15); color: #888888; }
+
+    @media (max-width: 900px) {
+      .container { grid-template-columns: 1fr; grid-template-rows: auto; }
+      .right-panel { display: none; }
+      .left-panel { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header>
+  <div class="logo">
+    <div class="logo-text">Collab<span>Sync</span></div>
+  </div>
+  <div class="status-bar">
+    <div class="status-dot">
+      <div class="dot" id="wsDot"></div>
+      <span id="wsLabel">Disconnected</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── MAIN ── -->
+<div class="container">
+
+  <!-- LEFT: Connect + Presence -->
+  <div class="panel left-panel">
+    <div class="panel-header">
+      <span>Session</span>
+      <span id="connectedCount" style="color:var(--accent2)">0 online</span>
+    </div>
+
+    <div class="connect-form">
+      <div class="field">
+        <label>Document ID</label>
+        <input id="docId" type="text" value="doc-001" placeholder="e.g. doc-001"/>
+      </div>
+      <div class="field">
+        <label>Your Name</label>
+        <input id="userId" type="text" placeholder="e.g. Alice"/>
+      </div>
+      <button class="btn btn-primary" id="connectBtn" onclick="connect()">
+        Connect & Join
+      </button>
+      <button class="btn btn-danger" id="disconnectBtn" onclick="disconnect()" disabled>
+        ✕ Disconnect
+      </button>
+    </div>
+
+    <hr class="divider"/>
+
+    <div class="panel-header">
+      <span>Active Users</span>
+    </div>
+    <div class="presence-list" id="presenceList">
+      <div style="color:var(--muted);font-size:.78rem;text-align:center;padding:1rem">
+        Connect to see active users
+      </div>
+    </div>
+
+    <hr class="divider"/>
+
+    <div class="panel-header"><span>Server Health</span></div>
+    <div class="health-cards" id="healthCards">
+      <div class="health-card"><div class="h-dot h-down" id="hApp"></div><div class="h-label">Spring Boot</div><div class="h-val" id="hAppVal">—</div></div>
+      <div class="health-card"><div class="h-dot h-down" id="hDb"></div><div class="h-label">PostgreSQL</div><div class="h-val" id="hDbVal">—</div></div>
+      <div class="health-card"><div class="h-dot h-down" id="hRedis"></div><div class="h-label">Redis</div><div class="h-val" id="hRedisVal">—</div></div>
+    </div>
+  </div>
+
+  <!-- CENTRE: Editor -->
+  <div class="panel editor-panel">
+    <div class="editor-toolbar">
+      <span style="font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Document</span>
+      <div class="doc-id-badge" id="currentDocId">—</div>
+      <div class="version-badge">v<span id="versionNum">0</span></div>
+      <div class="spacer"></div>
+      <button class="btn btn-secondary" style="padding:.4rem .8rem;font-size:.75rem" onclick="loadDocument()">↻ Reload</button>
+      <button class="btn btn-secondary" style="padding:.4rem .8rem;font-size:.75rem" onclick="clearEditor()">✕ Clear</button>
+    </div>
+
+    <div class="editor-body">
+      <textarea id="editor"
+        placeholder="Connect to a document and start typing... your changes will sync in real-time."
+        disabled
+        oninput="onEditorInput(event)"
+      ></textarea>
+      <div class="typing-bar" id="typingBar"></div>
+    </div>
+
+    <div class="editor-footer">
+      <span id="lastOp" style="color:var(--muted)">No operations yet</span>
+      <span class="char-count" id="charCount">0 chars</span>
+    </div>
+  </div>
+
+  <!-- RIGHT: Activity Log -->
+  <div class="panel right-panel">
+    <div class="panel-header">
+      <span>Activity Log</span>
+      <button onclick="clearLog()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:.72rem">Clear</button>
+    </div>
+    <div class="log-list" id="logList">
+      <div class="log-item info">
+        <div>App ready. Connect to a document to begin.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+  let stompClient = null;
+  let connected = false;
+  let currentDocId = null;
+  let currentUserId = null;
+  let lastContent = '';
+  let version = 0;
+  let presenceMap = {};
+  const COLORS = ['#888888','#aaaaaa','#cccccc','#666666','#999999','#bbbbbb','#777777','#dddddd'];
+
+  // ─── LOGGING ───
+  function log(msg, type='info') {
+    const el = document.createElement('div');
+    el.className = `log-item ${type}`;
+    const t = new Date().toLocaleTimeString();
+    el.innerHTML = `<div>${msg}</div><div class="log-time">${t}</div>`;
+    const list = document.getElementById('logList');
+    list.prepend(el);
+    if (list.children.length > 80) list.lastChild.remove();
+  }
+
+  // ─── TOAST ───
+  function toast(msg, type='success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `show ${type}`;
+    setTimeout(() => t.className = '', 3000);
+  }
+
+  // ─── HEALTH CHECK ───
+  async function checkHealth() {
+    try {
+      const res = await fetch('/actuator/health');
+      const data = await res.json();
+      const app = data.status === 'UP';
+      const db  = data.components?.db?.status === 'UP';
+      const redis = data.components?.redis?.status === 'UP';
+
+      setHealth('hApp',   app,   app ? ':8080' : 'DOWN');
+      setHealth('hDb',    db,    db  ? 'PostgreSQL' : 'DOWN');
+      setHealth('hRedis', redis, redis ? data.components.redis.details?.version : 'DOWN');
+    } catch(e) {
+      setHealth('hApp', false, 'unreachable');
+    }
+  }
+  function setHealth(id, up, val) {
+    document.getElementById(id).className = `h-dot ${up ? 'h-up' : 'h-down'}`;
+    document.getElementById(id+'Val').textContent = val;
+  }
+
+  // ─── CONNECT ───
+  function connect() {
+    const docId = document.getElementById('docId').value.trim();
+    const userId = document.getElementById('userId').value.trim() || 'User_' + Math.random().toString(36).slice(2,6);
+    if (!docId) { toast('Enter a Document ID', 'error'); return; }
+
+    currentDocId = docId;
+    currentUserId = userId;
+    document.getElementById('userId').value = userId;
+
+    log(`Connecting as <b>${userId}</b> to <b>${docId}</b>…`);
+    document.getElementById('connectBtn').disabled = true;
+
+    const socket = new SockJS('/ws');
+    stompClient = Stomp.over(socket);
+    stompClient.debug = null; // suppress console spam
+
+    stompClient.connect({}, onConnected, onError);
+  }
+
+  function onConnected() {
+    connected = true;
+    updateConnectionUI(true);
+    log(`✅ WebSocket connected`, 'success');
+    toast('Connected! Joining document…');
+
+    // subscribe to document topic
+    stompClient.subscribe(`/topic/document/${currentDocId}`, onDocumentUpdate);
+
+    // subscribe to presence
+    stompClient.subscribe(`/topic/presence/${currentDocId}`, onPresenceUpdate);
+
+    // join document
+    stompClient.send('/app/document/join', {}, JSON.stringify({
+      documentId: currentDocId,
+      userId: currentUserId
+    }));
+
+    // load current doc state
+    loadDocument();
+    updatePresence();
+  }
+
+  function onError(err) {
+    log(`Connection error: ${err}`, 'error');
+    toast('Connection failed!', 'error');
+    updateConnectionUI(false);
+  }
+
+  function disconnect() {
+    if (stompClient) stompClient.disconnect();
+    connected = false;
+    updateConnectionUI(false);
+    presenceMap = {};
+    renderPresence();
+    document.getElementById('editor').disabled = true;
+    log('Disconnected', 'error');
+    toast('Disconnected', 'error');
+  }
+
+  function updateConnectionUI(isConnected) {
+    document.getElementById('wsDot').className = 'dot' + (isConnected ? ' connected' : '');
+    document.getElementById('wsLabel').textContent = isConnected ? `Connected` : 'Disconnected';
+    document.getElementById('connectBtn').disabled = isConnected;
+    document.getElementById('disconnectBtn').disabled = !isConnected;
+    document.getElementById('editor').disabled = !isConnected;
+    document.getElementById('currentDocId').textContent = isConnected ? currentDocId : '—';
+    if (isConnected) document.getElementById('editor').focus();
+  }
+
+  // ─── LOAD DOC ───
+  async function loadDocument() {
+    if (!currentDocId) return;
+    try {
+      const res = await fetch(`/document/${currentDocId}`);
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('editor').value = data.content || '';
+        lastContent = data.content || '';
+        version = data.version || 0;
+        document.getElementById('versionNum').textContent = version;
+        document.getElementById('charCount').textContent = lastContent.length + ' chars';
+        log(`📄 Document loaded (v${version})`, 'success');
+      }
+    } catch(e) {
+      log(`Failed to load document: ${e.message}`, 'error');
+    }
+  }
+
+  // ─── EDITOR INPUT ───
+  let debounce = null;
+  function onEditorInput(e) {
+    if (!connected) return;
+    const newContent = e.target.value;
+    document.getElementById('charCount').textContent = newContent.length + ' chars';
+
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      sendOperation(newContent);
+    }, 200);
+  }
+
+  function sendOperation(newContent) {
+    const old = lastContent;
+    let type, position, value;
+
+    if (newContent.length > old.length) {
+      // INSERT
+      for (let i = 0; i < old.length; i++) {
+        if (old[i] !== newContent[i]) { position = i; break; }
+      }
+      if (position === undefined) position = old.length;
+      value = newContent.slice(position, position + (newContent.length - old.length));
+      type = 'INSERT';
+    } else {
+      // DELETE
+      for (let i = 0; i < newContent.length; i++) {
+        if (old[i] !== newContent[i]) { position = i; break; }
+      }
+      if (position === undefined) position = newContent.length;
+      value = old.slice(position, position + (old.length - newContent.length));
+      type = 'DELETE';
+    }
+
+    const op = {
+      documentId: currentDocId,
+      userId: currentUserId,
+      type,
+      position,
+      value,
+      version
+    };
+
+    stompClient.send('/app/document/edit', {}, JSON.stringify(op));
+    lastContent = newContent;
+    log(`📝 ${type} @ pos ${position}: "${value.slice(0,20)}${value.length>20?'…':''}"`, 'op');
+    document.getElementById('lastOp').textContent = `Last: ${type} @ ${position}`;
+  }
+
+  // ─── RECEIVE UPDATE ───
+  function onDocumentUpdate(msg) {
+    const data = JSON.parse(msg.body);
+    if (data.userId === currentUserId) return; // skip own ops
+
+    const editor = document.getElementById('editor');
+    const pos = editor.selectionStart;
+    editor.value = data.content || lastContent;
+    lastContent = editor.value;
+    version = data.version || version;
+    document.getElementById('versionNum').textContent = version;
+    document.getElementById('charCount').textContent = lastContent.length + ' chars';
+    // restore cursor
+    editor.setSelectionRange(pos, pos);
+
+    showTyping(data.userId || 'Someone');
+    log(`Update from <b>${data.userId}</b> (v${data.version})`, 'info');
+  }
+
+  // ─── PRESENCE ───
+  function onPresenceUpdate(msg) {
+    const data = JSON.parse(msg.body);
+    if (data.users) {
+      presenceMap = {};
+      data.users.forEach(u => presenceMap[u] = true);
+    }
+    renderPresence();
+  }
+
+  function updatePresence() {
+    presenceMap[currentUserId] = true;
+    renderPresence();
+  }
+
+  function renderPresence() {
+    const list = document.getElementById('presenceList');
+    const users = Object.keys(presenceMap);
+    document.getElementById('connectedCount').textContent = users.length + ' online';
+
+    if (!users.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:.78rem;text-align:center;padding:1rem">No users online</div>';
+      return;
+    }
+    list.innerHTML = '';
+    users.forEach((u, i) => {
+      const color = COLORS[i % COLORS.length];
+      const div = document.createElement('div');
+      div.className = 'presence-item';
+      div.innerHTML = `
+        <div class="avatar" style="background:${color}22;color:${color}">
+          ${u[0].toUpperCase()}
+        </div>
+        <div class="presence-name">${u}</div>
+        ${u === currentUserId ? '<span class="presence-you">you</span>' : ''}
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  // ─── TYPING INDICATOR ───
+  let typingTimer;
+  function showTyping(user) {
+    const bar = document.getElementById('typingBar');
+    bar.textContent = `✍️ ${user} is typing…`;
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => bar.textContent = '', 2000);
+  }
+
+  function clearEditor() {
+    document.getElementById('editor').value = '';
+    lastContent = '';
+    document.getElementById('charCount').textContent = '0 chars';
+  }
+
+  function clearLog() {
+    document.getElementById('logList').innerHTML = '';
+  }
+
+  // ─── INIT ───
+  checkHealth();
+  setInterval(checkHealth, 10000);
+
+  // auto-fill a random user name
+  document.getElementById('userId').value = 'User_' + Math.random().toString(36).slice(2,6).toUpperCase();
+</script>
+</body>
+</html>
