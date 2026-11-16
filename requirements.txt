@@ -1,0 +1,13 @@
+torch
+torchvision
+ultralytics
+opencv-python-headless
+easyocr
+facenet-pytorch
+numpy
+pandas
+streamlit
+requests
+huggingface_hub
+sqlalchemy
+tf-keras
