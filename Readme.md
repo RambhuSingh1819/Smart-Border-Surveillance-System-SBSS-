@@ -1,4 +1,4 @@
-# Real-Time Collaborative Sync Engine
+# Real-Time Collaborative Document Editing 
 
 **Distributed, real-time collaborative document editing with Java 21, Spring Boot, WebSockets, Redis, Kafka, PostgreSQL, Docker, and Kubernetes.**
 
